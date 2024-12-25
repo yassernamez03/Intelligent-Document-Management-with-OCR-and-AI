@@ -18,11 +18,29 @@ import cv2
 # Configuration de la page
 st.set_page_config(page_title="Système de Gestion des Documents", layout="wide")
 
+
 # Initialisation des variables de session
 if 'documents' not in st.session_state:
     st.session_state.documents = []
 if 'classifier' not in st.session_state:
     st.session_state.classifier = None
+if 'current_image' not in st.session_state:
+    st.session_state.current_image = None
+if 'processed_image' not in st.session_state:
+    st.session_state.processed_image = None
+if 'text_content' not in st.session_state:
+    st.session_state.text_content = ""
+if 'category' not in st.session_state:
+    st.session_state.category = ""
+if 'tags' not in st.session_state:
+    st.session_state.tags = ""
+    
+def update_category(value):
+    st.session_state.category = value
+
+def update_tags(value):
+    st.session_state.tags = value
+
 
 class Document:
     def __init__(self, name, content, category=None, metadata=None):
@@ -33,48 +51,70 @@ class Document:
         self.timestamp = datetime.now()
         self.confidence_score = None
 
-def preprocess_image(image):
+def preprocess_image(image, brightness=0, contrast=1.0, blur_amount=0):
+    # Conversion en array numpy
+    img_array = np.array(image)
+    
+    # Ajustement de la luminosité
+    img_array = cv2.convertScaleAbs(img_array, alpha=contrast, beta=brightness)
+    
+    # Application du flou si nécessaire
+    if blur_amount > 0:
+        img_array = cv2.GaussianBlur(img_array, (blur_amount*2+1, blur_amount*2+1), 0)
+    
     # Conversion en niveaux de gris
-    gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
-    # Amélioration du contraste
+    gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    
+    # Amélioration du contraste adaptatif
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    gray = clahe.apply(gray)
+    processed = clahe.apply(gray)
+    
     # Débruitage
-    denoised = cv2.fastNlMeansDenoising(gray)
+    denoised = cv2.fastNlMeansDenoising(processed)
+    
     return denoised
 
 def extract_text_from_image(image):
-    # Prétraitement de l'image
-    processed_image = preprocess_image(image)
     # Extraction du texte avec OCR
-    text = pytesseract.image_to_string(processed_image, lang='fra+eng')
+    text = pytesseract.image_to_string(image, lang='fra+eng')
     return text
 
 def train_classifier(documents):
     if not documents:
         return None
     
-    # Création du pipeline de classification
     pipeline = Pipeline([
         ('tfidf', TfidfVectorizer(max_features=5000)),
         ('clf', MultinomialNB())
     ])
     
-    # Préparation des données
     texts = [doc.content for doc in documents if doc.category]
     labels = [doc.category for doc in documents if doc.category]
     
     if len(set(labels)) < 2:
         return None
         
-    # Entraînement du modèle
     pipeline.fit(texts, labels)
     return pipeline
+
+def save_document(file, text_content, category, tags):
+    metadata = {
+        "tags": [tag.strip() for tag in tags.split(",") if tag.strip()],
+        "file_type": file.type,
+        "size": file.size}
+    
+    doc = Document(file.name, text_content, category, metadata)
+    st.session_state.documents.append(doc)
+    # Réinitialiser les champs après la sauvegarde
+    st.session_state.category = ""
+    st.session_state.tags = ""
+    st.session_state.text_content = ""
+    return True
+
 
 def main():
     st.title("Système de Gestion Intelligente des Documents")
     
-    # Sidebar pour la navigation
     menu = st.sidebar.selectbox(
         "Menu Principal",
         ["Import et OCR", "Classification", "Analyse et Statistiques", "Recherche", "Export"]
@@ -87,36 +127,65 @@ def main():
         
         if uploaded_file:
             if uploaded_file.type == "application/pdf":
-                # Conversion PDF en images
                 images = pdf2image.convert_from_bytes(uploaded_file.read())
-                text_content = ""
-                for img in images:
-                    text_content += extract_text_from_image(img) + "\n"
+                st.session_state.current_image = images[0]  # On prend la première page pour commencer
             else:
-                image = Image.open(uploaded_file)
-                text_content = extract_text_from_image(image)
+                st.session_state.current_image = Image.open(uploaded_file)
             
-            st.write("Texte extrait :")
-            st.text_area("", text_content, height=300)
+            # Interface de prévisualisation et d'édition
+            st.subheader("Prévisualisation et Édition")
+            col1, col2 = st.columns([2, 1])
             
-            # Métadonnées
-            st.subheader("Métadonnées")
+            with col1:
+                st.image(st.session_state.current_image, caption="Image originale", use_column_width=True)
+            
+            with col2:
+                st.subheader("Paramètres de traitement")
+                brightness = st.slider("Luminosité", -100, 100, 0)
+                contrast = st.slider("Contraste", 0.0, 3.0, 1.0, 0.1)
+                blur = st.slider("Flou", 0, 5, 0)
+                
+                if st.button("Appliquer le traitement"):
+                    processed = preprocess_image(
+                        st.session_state.current_image,
+                        brightness=brightness,
+                        contrast=contrast,
+                        blur_amount=blur
+                    )
+                    st.session_state.processed_image = processed
+                    st.image(processed, caption="Image traitée", use_column_width=True)
+            
+            # Extraction du texte
             col1, col2 = st.columns(2)
             with col1:
-                category = st.text_input("Catégorie du document")
-            with col2:
-                tags = st.text_input("Tags (séparés par des virgules)")
+                if st.button("Extraire le texte"):
+                    if st.session_state.processed_image is not None:
+                        st.session_state.text_content = extract_text_from_image(st.session_state.processed_image)
+                    else:
+                        st.session_state.text_content = extract_text_from_image(
+                            preprocess_image(st.session_state.current_image))
             
-            if st.button("Sauvegarder le document"):
-                metadata = {
-                    "tags": [tag.strip() for tag in tags.split(",")],
-                    "file_type": uploaded_file.type,
-                    "size": uploaded_file.size
-                }
-                doc = Document(uploaded_file.name, text_content, category, metadata)
-                st.session_state.documents.append(doc)
-                st.success(f"Document '{uploaded_file.name}' sauvegardé avec succès!")
-    
+            if st.session_state.text_content:
+                st.text_area("Texte extrait :", st.session_state.text_content, height=300)
+                
+                # Formulaire de métadonnées
+                with st.form(key='metadata_form'):
+                    st.subheader("Métadonnées")
+                    category = st.text_input("Catégorie du document", 
+                                          value=st.session_state.category,
+                                          key='category_input')
+                    tags = st.text_input("Tags (séparés par des virgules)", 
+                                     value=st.session_state.tags,
+                                     key='tags_input')
+                    
+                    submit_button = st.form_submit_button(label='Sauvegarder le document')
+                    if submit_button:
+                        if save_document(uploaded_file, 
+                                      st.session_state.text_content,
+                                      category, 
+                                      tags):
+                            st.success(f"Document '{uploaded_file.name}' sauvegardé avec succès!")
+
     elif menu == "Classification":
         st.header("Classification des Documents")
         
