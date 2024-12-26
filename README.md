@@ -23,7 +23,7 @@ A project focused on intelligent document management using OCR (Optical Characte
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/MedElanaami/Gestion-Intelligente-des-documents-avec-OCR-et-IA.git
+git clone https://github.com/yassernamez03/Intelligent-Document-Management-with-OCR-and-AI.git
 cd Gestion-Intelligente-des-documents-avec-OCR-et-IA
 ```
 
