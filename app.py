@@ -278,13 +278,12 @@ def main():
                         if selected_tags:
                             st.session_state.tags = ', '.join(selected_tags)
                             
-                                        submit_button = st.form_submit_button(label='Sauvegarder le document')
+                    submit_button = st.form_submit_button(label='Sauvegarder le document')
                     if submit_button:
                         if save_document(uploaded_file, 
                                       st.session_state.text_content,
                                       category, 
-                                      tags, 
-                                      processing_params):
+                                      tags):
                             st.success(f"Document '{uploaded_file.name}' sauvegardé avec succès!")
 
 
