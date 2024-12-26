@@ -14,11 +14,27 @@ from sklearn.pipeline import Pipeline
 import pickle
 import pdf2image
 import cv2
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from nltk.tag import pos_tag
+from collections import Counter
+import string
+from rake_nltk import Rake
 
 # Configuration de la page
 st.set_page_config(page_title="Système de Gestion des Documents", layout="wide")
 
-
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('averaged_perceptron_tagger')
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('averaged_perceptron_tagger')
+    nltk.download('stopwords')
+    nltk.download('averaged_perceptron_tagger')
+    
 # Initialisation des variables de session
 if 'documents' not in st.session_state:
     st.session_state.documents = []
@@ -34,7 +50,10 @@ if 'category' not in st.session_state:
     st.session_state.category = ""
 if 'tags' not in st.session_state:
     st.session_state.tags = ""
+if 'suggested_tags' not in st.session_state:
+    st.session_state.suggested_tags = [] 
     
+     
 def update_category(value):
     st.session_state.category = value
 
@@ -74,6 +93,62 @@ def preprocess_image(image, brightness=0, contrast=1.0, blur_amount=0):
     
     return denoised
 
+def generate_tags(text, num_tags=10):
+    """
+    Génère des tags automatiquement en utilisant TF-IDF et RAKE
+    """
+    if not text:
+        return []
+    
+    tags = set()
+    
+    # 1. Méthode RAKE
+    rake = Rake(language='french')
+    rake.extract_keywords_from_text(text)
+    rake_phrases = rake.get_ranked_phrases()[:num_tags]
+    tags.update(rake_phrases)
+
+    # 2. Méthode TF-IDF pour les mots uniques
+    try:
+        # Préparation du texte
+        stop_words = set(stopwords.words('french') + stopwords.words('english'))
+        words = word_tokenize(text.lower())
+        words = [w for w in words if w.isalnum() and w not in stop_words and len(w) > 2]
+        
+        # Création d'un petit corpus pour TF-IDF
+        vectorizer = TfidfVectorizer(max_features=num_tags, 
+                                   stop_words=list(stop_words),
+                                   ngram_range=(1, 2))
+        tfidf_matrix = vectorizer.fit_transform([' '.join(words)])
+        feature_array = np.array(vectorizer.get_feature_names_out())
+        tfidf_sorting = np.argsort(tfidf_matrix.toarray()).flatten()[::-1]
+        top_words = feature_array[tfidf_sorting][:num_tags]
+        tags.update(top_words)
+    except Exception as e:
+        st.warning(f"Erreur lors de l'extraction TF-IDF : {str(e)}")
+
+    # 3. Extraction des noms propres et entités importantes
+    try:
+        tagged_words = pos_tag(words)
+        proper_nouns = [word for word, tag in tagged_words if tag.startswith('NNP')]
+        tags.update(proper_nouns[:num_tags//2])
+    except Exception as e:
+        st.warning(f"Erreur lors de l'extraction des noms propres : {str(e)}")
+
+    # Nettoyage et filtrage des tags
+    cleaned_tags = []
+    for tag in tags:
+        # Nettoyage basique
+        tag = tag.strip().lower()
+        # Filtrage par longueur et contenu
+        if len(tag) > 2 and not tag.isdigit() and tag not in stop_words:
+            cleaned_tags.append(tag)
+
+    # Tri par longueur et limitation du nombre de tags
+    cleaned_tags = sorted(set(cleaned_tags), key=len)[:num_tags]
+    return cleaned_tags
+
+
 def extract_text_from_image(image):
     # Extraction du texte avec OCR
     text = pytesseract.image_to_string(image, lang='fra+eng')
@@ -109,6 +184,7 @@ def save_document(file, text_content, category, tags):
     st.session_state.category = ""
     st.session_state.tags = ""
     st.session_state.text_content = ""
+    st.session_state.suggested_tags = []
     return True
 
 
@@ -174,17 +250,43 @@ def main():
                     category = st.text_input("Catégorie du document", 
                                           value=st.session_state.category,
                                           key='category_input')
-                    tags = st.text_input("Tags (séparés par des virgules)", 
-                                     value=st.session_state.tags,
-                                     key='tags_input')
+                    # Section des tags
+                    st.subheader("Tags")
+                    col1, col2 = st.columns(2)
                     
-                    submit_button = st.form_submit_button(label='Sauvegarder le document')
+                    with col1:
+                        tags = st.text_input("Tags manuels (séparés par des virgules)", 
+                                         value=st.session_state.tags,
+                                         key='tags_input')
+                    
+                    with col2:
+                        num_tags = st.slider("Nombre de tags à générer", 5, 20, 10)
+                    
+                    if st.form_submit_button("Générer des tags automatiques"):
+                        suggested_tags = generate_tags(st.session_state.text_content, num_tags=num_tags)
+                        st.session_state.suggested_tags = suggested_tags
+                        if suggested_tags:
+                            st.session_state.tags = ', '.join(suggested_tags)
+                    
+                    # Affichage des tags suggérés s'ils existent
+                    if st.session_state.suggested_tags:
+                        st.write("Tags suggérés :")
+                        selected_tags = []
+                        for tag in st.session_state.suggested_tags:
+                            if st.checkbox(tag, key=f"tag_{tag}"):
+                                selected_tags.append(tag)
+                        if selected_tags:
+                            st.session_state.tags = ', '.join(selected_tags)
+                            
+                                        submit_button = st.form_submit_button(label='Sauvegarder le document')
                     if submit_button:
                         if save_document(uploaded_file, 
                                       st.session_state.text_content,
                                       category, 
-                                      tags):
+                                      tags, 
+                                      processing_params):
                             st.success(f"Document '{uploaded_file.name}' sauvegardé avec succès!")
+
 
     elif menu == "Classification":
         st.header("Classification des Documents")
