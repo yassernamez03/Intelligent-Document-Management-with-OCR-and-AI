@@ -23,7 +23,11 @@ import string
 from rake_nltk import Rake
 
 # Configuration de la page
-st.set_page_config(page_title="Système de Gestion des Documents", layout="wide")
+st.set_page_config(
+    page_title="Système de Gestion des Documents",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 try:
     nltk.data.find('tokenizers/punkt')
@@ -91,7 +95,7 @@ def preprocess_image(image, brightness=0, contrast=1.0, blur_amount=0):
     # Débruitage
     denoised = cv2.fastNlMeansDenoising(processed)
     
-    return denoised
+    return denoised 
 
 def generate_tags(text, num_tags=10):
     """
@@ -311,28 +315,143 @@ def main():
         st.header("Analyse et Statistiques")
         
         if st.session_state.documents:
-            # Distribution des catégories
-            categories = [doc.category for doc in st.session_state.documents if doc.category]
-            if categories:
-                fig, ax = plt.subplots()
-                sns.countplot(y=categories)
-                plt.title("Distribution des catégories de documents")
+            # Création des onglets pour organiser les visualisations
+            tabs = st.tabs(["Distributions", "Analyse Temporelle", "Analyse Textuelle", "Tags et Métadonnées"])
+            
+            with tabs[0]:
+                st.subheader("Distribution des Documents")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Distribution des catégories avec pourcentages
+                    categories = [doc.category for doc in st.session_state.documents if doc.category]
+                    if categories:
+                        category_counts = pd.Series(categories).value_counts()
+                        fig, ax = plt.subplots(figsize=(10, 6))
+                        bars = sns.barplot(x=category_counts.values, y=category_counts.index)
+                        
+                        # Ajouter les pourcentages sur les barres
+                        total = len(categories)
+                        for i, v in enumerate(category_counts.values):
+                            percentage = v / total * 100
+                            ax.text(v, i, f' {percentage:.1f}%', va='center')
+                        
+                        plt.title("Distribution des catégories")
+                        st.pyplot(fig)
+                
+                with col2:
+                    # Distribution des types de fichiers
+                    file_types = [doc.metadata.get('file_type', 'Unknown') for doc in st.session_state.documents]
+                    fig, ax = plt.subplots(figsize=(8, 8))
+                    plt.pie(pd.Series(file_types).value_counts(), 
+                        labels=pd.Series(file_types).value_counts().index,
+                        autopct='%1.1f%%')
+                    plt.title("Types de fichiers")
+                    st.pyplot(fig)
+
+            with tabs[1]:
+                st.subheader("Analyse Temporelle")
+                
+                # Timeline interactive avec sélection de période
+                dates = [doc.timestamp for doc in st.session_state.documents]
+                date_df = pd.DataFrame({'date': dates})
+                date_df['year'] = date_df['date'].dt.year
+                date_df['month'] = date_df['date'].dt.month
+                date_df['day'] = date_df['date'].dt.day
+                
+                # Sélection de la période
+                period = st.selectbox("Grouper par", ["Jour", "Mois", "Année"])
+                
+                if period == "Jour":
+                    grouped = date_df.groupby(['year', 'month', 'day']).size()
+                elif period == "Mois":
+                    grouped = date_df.groupby(['year', 'month']).size()
+                else:
+                    grouped = date_df.groupby('year').size()
+                
+                fig, ax = plt.subplots(figsize=(12, 6))
+                grouped.plot(kind='bar')
+                plt.title(f"Documents par {period}")
+                plt.xticks(rotation=45)
                 st.pyplot(fig)
-            
-            # Timeline des uploads
-            dates = [doc.timestamp for doc in st.session_state.documents]
-            fig, ax = plt.subplots()
-            plt.hist(dates, bins=20)
-            plt.title("Timeline des documents importés")
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
-            
-            # Statistiques textuelles
-            st.subheader("Statistiques textuelles")
-            word_counts = [len(doc.content.split()) for doc in st.session_state.documents]
-            st.write(f"Nombre moyen de mots par document : {np.mean(word_counts):.0f}")
-            st.write(f"Nombre total de documents : {len(st.session_state.documents)}")
-    
+                
+                # Heatmap des uploads par jour de la semaine et heure
+                st.subheader("Activité par jour et heure")
+                date_df['weekday'] = date_df['date'].dt.day_name()
+                date_df['hour'] = date_df['date'].dt.hour
+                
+                pivot_table = pd.crosstab(date_df['weekday'], date_df['hour'])
+                fig, ax = plt.subplots(figsize=(15, 7))
+                sns.heatmap(pivot_table, cmap='YlOrRd', annot=True, fmt='d')
+                plt.title("Heatmap des uploads par jour et heure")
+                st.pyplot(fig)
+
+            with tabs[2]:
+                st.subheader("Analyse Textuelle")
+                
+                # Statistiques de base
+                word_counts = [len(doc.content.split()) for doc in st.session_state.documents]
+                char_counts = [len(doc.content) for doc in st.session_state.documents]
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Nombre moyen de mots", f"{np.mean(word_counts):.0f}")
+                with col2:
+                    st.metric("Longueur moyenne (caractères)", f"{np.mean(char_counts):.0f}")
+                with col3:
+                    st.metric("Nombre total de documents", len(st.session_state.documents))
+                
+                # Distribution de la longueur des documents
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.histplot(word_counts, bins=30)
+                plt.title("Distribution de la longueur des documents")
+                plt.xlabel("Nombre de mots")
+                st.pyplot(fig)
+                
+                # Analyse des mots les plus fréquents
+                if st.checkbox("Afficher les mots les plus fréquents"):
+                    stop_words = set(stopwords.words('french') + stopwords.words('english'))
+                    all_words = []
+                    for doc in st.session_state.documents:
+                        words = word_tokenize(doc.content.lower())
+                        words = [w for w in words if w.isalnum() and w not in stop_words and len(w) > 2]
+                        all_words.extend(words)
+                    
+                    word_freq = Counter(all_words).most_common(20)
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    sns.barplot(x=[count for word, count in word_freq],
+                            y=[word for word, count in word_freq])
+                    plt.title("20 mots les plus fréquents")
+                    plt.xticks(rotation=45)
+                    st.pyplot(fig)
+
+            with tabs[3]:
+                st.subheader("Analyse des Tags et Métadonnées")
+                
+                # Analyse des tags
+                all_tags = []
+                for doc in st.session_state.documents:
+                    tags = doc.metadata.get('tags', [])
+                    all_tags.extend(tags)
+                
+                if all_tags:
+                    tag_counts = Counter(all_tags).most_common(15)
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    sns.barplot(x=[count for tag, count in tag_counts],
+                            y=[tag for tag, count in tag_counts])
+                    plt.title("Tags les plus utilisés")
+                    st.pyplot(fig)
+                
+                # Analyse de la taille des fichiers
+                sizes = [doc.metadata.get('size', 0) for doc in st.session_state.documents]
+                fig, ax = plt.subplots(figsize=(10, 6))
+                plt.hist([size/1024/1024 for size in sizes], bins=20)  # Conversion en MB
+                plt.title("Distribution de la taille des fichiers")
+                plt.xlabel("Taille (MB)")
+                st.pyplot(fig)
+        else:
+            st.warning("Aucun document n'a été importé pour l'analyse.")
+        
     elif menu == "Recherche":
         st.header("Recherche de Documents")
         
